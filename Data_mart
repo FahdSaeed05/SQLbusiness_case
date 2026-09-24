@@ -1,0 +1,253 @@
+DROP TABLE IF EXISTS clean_weekly_sales;
+
+SELECT
+    CONVERT(DATE, TRIM(week_date), 3) AS week_date,
+    DATEPART(week, CONVERT(DATE, TRIM(week_date), 3)) AS week_number,
+    DATEPART(month, CONVERT(DATE, TRIM(week_date), 3)) AS month_number,
+    DATEPART(year, CONVERT(DATE, TRIM(week_date), 3)) AS calendar_year,
+    TRIM(region) AS region,
+    TRIM(platform) AS platform,
+    -- 1. The Original Segment Column (Standardised)
+    CASE WHEN TRIM(segment) = 'null' THEN 'unknown' ELSE TRIM(segment) END AS segment,
+    
+    -- 2. New AGE_BAND Column (Based on the last character / number)
+    CASE 
+        WHEN RIGHT(TRIM(segment), 1) = '1' THEN 'Young Singles'
+        WHEN RIGHT(TRIM(segment), 1) = '2' THEN 'Middle Aged'
+        WHEN RIGHT(TRIM(segment), 1) IN ('3', '4') THEN 'Retirees'
+        ELSE 'unknown'
+    END AS age_band,
+    -- 3. New DEMOGRAPHIC Column (Based on the first letter)
+    CASE 
+        WHEN LEFT(TRIM(segment), 1) = 'C' THEN 'Couples'
+        WHEN LEFT(TRIM(segment), 1) = 'F' THEN 'Families'
+        ELSE 'unknown'
+    END AS demographic,
+    
+    TRIM(customer_type) AS customer_type,
+    transactions,
+    sales,
+    CAST(ROUND(sales / (transactions * 1.0), 2) AS DECIMAL(10,2)) AS avg_transaction
+INTO clean_weekly_sales
+FROM dbo.weekly_sales;
+SELECT * FROM clean_weekly_sales
+
+
+--2. Data Exploration
+--1.What day of the week is used for each week_date value?
+
+
+SELECT
+week_date,
+DATENAME(weekday, week_date) as day_of_week
+from clean_weekly_sales
+
+--2. What range of week numbers are missing from the dataset?
+
+WITH All_weeks AS (
+
+SELECT
+    1 AS week_no
+    UNION ALL
+    SELECT week_no + 1
+    FROM ALL_weeks
+    WHERE week_no < 53
+)
+
+SELECT
+    week_no AS missing_week_numbers
+    FROM all_weeks
+    WHERE week_no NOT IN(SELECT DISTINCT week_number FROM clean_weekly_sales)
+    ORDER BY week_no
+
+--3.How many total transactions were there for each year in the dataset?
+SELECT
+Calendar_year,
+SUM(transactions) AS total_transactions
+
+FROM clean_weekly_sales
+GROUP BY Calendar_year
+
+--4.What is the total sales for each region for each month?
+SELECT
+    region,
+    month_number,
+    DATENAME(month, week_date) AS month_name,
+    SUM(Sales) AS total_sales
+FROM clean_weekly_sales
+GROUP BY region, month_number, DATENAME(month, week_date)
+ORDER BY month_number, total_sales DESC
+
+---5.What is the total count of transactions for each platform?
+
+SELECT
+    SUM(transactions) AS total_transactions,
+    region,
+    platform
+FROM clean_weekly_sales
+GROUP BY region, platform
+ORDER BY total_transactions DESC
+
+
+--6. What is the percentage of sales for Retail vs Shopify for each month?
+SELECT
+month_number,
+DATENAME(month, MIN(week_date)) AS month_name,
+platform,
+SUM(Sales) AS platform_sales,
+CAST(SUM(Sales) * 100 / SUM(SUM(Sales)) OVER(PARTITION BY month_number) AS decimal(10, 2)
+) AS Sales_percentage
+
+FROM clean_weekly_sales
+WHERE platform IN ('Shopify', 'Retail')
+
+GROUP BY month_number, platform
+ORDER BY month_number, platform
+
+--7. What is the percentage of sales by demographic for each year in the dataset?
+SELECT
+    calendar_year,
+    demographic,
+    SUM(Sales) AS demographic_sales,
+    CAST(SUM(Sales) * 100 / SUM(SUM(Sales)) OVER(PARTITION BY calendar_year) AS decimal (10, 2) 
+    ) AS Sales_percentage 
+FROM Clean_weekly_sales
+GROUP BY Calendar_year, demographic
+ORDER BY Calendar_year, Sales_percentage DESC
+
+--8.Which age_band and demographic values contribute the most to Retail sales?
+
+SELECT
+age_band,
+demographic,
+SUM(Sales) AS Retail_sales,
+CAST
+    (SUM(Sales) * 100 / SUM(SUM(Sales)) OVER() AS DECIMAL(10, 2)
+) AS contribution_percentage
+
+FROM clean_weekly_sales
+WHERE platform = 'Retail'
+GROUP BY age_band, demographic
+ORDER BY Retail_sales DESC
+
+
+---9.Can we use the avg_transaction column to find the average transaction size for each year for Retail vs Shopify? If not - how would you calculate it instead?
+
+SELECT
+    calendar_year,
+    Platform,
+    CAST(SUM(Sales) * 1.0 / SUM(transactions) AS DECIMAL(10, 2)) AS AVG_transaction_size_actual
+
+FROM clean_weekly_sales
+WHERE platform IN ('Retail', 'Shopify')
+GROUP BY calendar_year, platform
+ORDER BY calendar_year, platform
+
+--1.What is the total sales for the 4 weeks before and after 2020-06-15? What is the growth or reduction rate in actual values and percentage of sales?
+
+WITH Categorized_Sales AS
+(
+    SELECT
+        Sales,
+        
+        CASE
+            WHEN Week_number BETWEEN 21 AND 24 THEN 'Before'
+            WHEN week_number BETWEEN 25 AND 28 THEN 'After'
+            ELSE 'Outside Window'
+        END AS time_period
+    FROM clean_weekly_sales
+    WHERE calendar_year = '2020'
+   )
+   SELECT--1. Total_Sales for both periods
+        SUM(CASE WHEN time_period IN ('Before', 'After') THEN sales ELSE 0 END) AS total_sales,
+        --2. Total_Sales for indivdual periods
+        SUM(CASE WHEN time_period = 'Before' THEN sales ELSE 0 END) AS before_sales,
+        SUM(CASE WHEN time_period = 'After' THEN sales ELSE 0 END) AS after_sales,
+
+       --2 Growth or reduction rate in actual rates
+       SUM(CASE WHEN time_period = 'After' THEN Sales ELSE 0 END) -
+       SUM(CASE WHEN time_period = 'Before' THEN Sales ELSE 0 END) AS actual_variance,
+       
+       --Growth or reduction rate in percentage
+       ROUND(
+          100 * (SUM(CASE WHEN time_period = 'After' THEN sales ELSE 0 END) -
+                SUM(CASE WHEN time_period = 'Before' THEN sales ELSE 0 END)) /
+          NULLIF(SUM(CASE WHEN time_period = 'Before' THEN sales ELSE 0 END), 0),
+          2) AS percentage_variance
+    FROM categorized_sales
+    WHERE time_period IN ('Before', 'After');
+
+
+  ---2.	What about the entire 12 weeks before and after?
+  
+  WITH Categorized_Sales AS
+(
+    SELECT
+        Sales,
+        
+        CASE
+            WHEN Week_number BETWEEN 13 AND 24 THEN 'Before'
+            WHEN week_number BETWEEN 25 AND 36 THEN 'After'
+            ELSE 'Outside Window'
+        END AS time_period
+    FROM clean_weekly_sales
+    WHERE calendar_year = '2020'
+   )
+   SELECT--1. Total_Sales for both periods
+        SUM(CASE WHEN time_period IN ('Before', 'After') THEN sales ELSE 0 END) AS total_sales,
+        --2. Total_Sales for indivdual periods
+        SUM(CASE WHEN time_period = 'Before' THEN sales ELSE 0 END) AS before_sales,
+        SUM(CASE WHEN time_period = 'After' THEN sales ELSE 0 END) AS after_sales,
+
+       --2 Growth or reduction rate in actual rates
+       SUM(CASE WHEN time_period = 'After' THEN Sales ELSE 0 END) -
+       SUM(CASE WHEN time_period = 'Before' THEN Sales ELSE 0 END) AS actual_variance,
+       
+       --Growth or reduction rate in percentage
+       ROUND(
+          100 * (SUM(CASE WHEN time_period = 'After' THEN sales ELSE 0 END) -
+                SUM(CASE WHEN time_period = 'Before' THEN sales ELSE 0 END)) /
+          NULLIF(SUM(CASE WHEN time_period = 'Before' THEN sales ELSE 0 END), 0),
+          2) AS percentage_variance
+    FROM categorized_sales
+    WHERE time_period IN ('Before', 'After');
+
+
+---3.How do the sale metrics for these 2 periods before and after compare with the previous years in 2018 and 2019?
+      
+  WITH Categorized_Sales AS
+(
+    SELECT
+        Sales,
+        Calendar_year,
+        CASE
+            WHEN Week_number BETWEEN 13 AND 24 THEN 'Before'
+            WHEN week_number BETWEEN 25 AND 36 THEN 'After'
+            ELSE 'Outside Window'
+        END AS time_period
+    FROM clean_weekly_sales
+    WHERE calendar_year IN ('2018', '2019', '2020')
+   )
+   SELECT--1. Total_Sales for both periods
+        Calendar_year,
+        SUM(CASE WHEN time_period IN ('Before', 'After') THEN sales ELSE 0 END) AS total_sales,
+        --2. Total_Sales for indivdual periods
+        SUM(CASE WHEN time_period = 'Before' THEN sales ELSE 0 END) AS before_sales,
+        SUM(CASE WHEN time_period = 'After' THEN sales ELSE 0 END) AS after_sales,
+
+       --2 Growth or reduction rate in actual rates
+       SUM(CASE WHEN time_period = 'After' THEN Sales ELSE 0 END) -
+       SUM(CASE WHEN time_period = 'Before' THEN Sales ELSE 0 END) AS actual_variance,
+       
+       --Growth or reduction rate in percentage
+       ROUND(
+          100 * (SUM(CASE WHEN time_period = 'After' THEN sales ELSE 0 END) -
+                SUM(CASE WHEN time_period = 'Before' THEN sales ELSE 0 END)) /
+          NULLIF(SUM(CASE WHEN time_period = 'Before' THEN sales ELSE 0 END), 0),
+          2) AS percentage_variance
+    FROM categorized_sales
+    WHERE time_period IN ('Before', 'After')
+
+    GROUP BY Calendar_year
+    ORDER BY calendar_year
+
