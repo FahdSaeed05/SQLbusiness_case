@@ -1,0 +1,394 @@
+--A. Customer Nodes Exploration
+--1.	How many unique nodes are there on the Data Bank system?
+
+
+SELECT 
+COUNT(DISTINCT node_id) AS unique_nodes
+FROM Customer_nodes
+
+--2.What is the number of nodes per region?
+
+SELECT
+	region_id,
+	COUNT(DISTINCT node_id) AS node_count
+FROM customer_nodes
+GROUP BY region_id
+
+-- 3.How many customers are allocated to each region?
+SELECT
+	region_id,
+	COUNT(customer_id) AS customer_count
+
+FROM customer_nodes
+GROUP BY region_id
+
+--4.How many days on average are customers reallocated to a different node?
+
+WITH Node_duration AS
+(
+SELECT
+	customer_id,
+	node_id,
+	DATEDIFF(DAY, start_date, end_date) AS node_days
+FROM Customer_nodes
+WHERE YEAR(end_date) != 9999 
+)
+
+SELECT
+	AVG(node_days) AS AVG_node_days
+FROM node_duration
+
+-- 5.What is the median, 80th and 95th percentile for this same reallocation days metric for each region?
+WITH Node_duration AS
+(
+SELECT
+	customer_id,
+	node_id,
+	region_id,
+	DATEDIFF(DAY, start_date, end_date) AS node_days
+FROM Customer_nodes
+WHERE YEAR(end_date) != 9999 
+)
+SELECT DISTINCT
+	Region_id,
+	
+	PERCENTILE_CONT(0.5)
+	WITHIN GROUP (ORDER BY node_days) OVER(PARTITION BY region_id) AS median,
+
+	PERCENTILE_CONT(0.8)
+	WITHIN GROUP (ORDER BY node_days) OVER(PARTITION BY region_id) AS Percentile_80,
+
+	PERCENTILE_CONT(0.95)
+	WITHIN GROUP (ORDER BY node_days) OVER(PARTITION BY region_id) AS Percentile_95
+
+FROM Node_duration
+ORDER BY region_id
+
+-- B. Customer Transactions
+--1.	What is the unique count and total amount for each transaction type?
+
+SELECT
+txn_type,
+COUNT(DISTINCT txn_type) AS Unique_count,
+SUM(Txn_amount) AS Txn_amount
+
+
+FROM customer_transactions
+GROUP BY txn_type
+
+--2. What is the average total historical deposit counts and amounts for all customers?
+SELECT
+	AVG(txn_type_count) AS avg_deposit_count,
+	AVG(total_amount) AS avg_total_amount
+
+FROM 
+
+(SELECT
+	customer_id,
+	COUNT(*) AS txn_type_count,
+	SUM(txn_amount) AS Total_amount
+FROM customer_transactions
+WHERE txn_type = 'deposit '
+GROUP BY customer_id
+) AS Customer_deposits
+
+
+-- 3. For each month - how many Data Bank customers make more than 1 deposit and either 1 purchase or 1 withdrawal in a single month?
+
+WITH customer_monthly_activity AS
+(
+SELECT
+	customer_id,
+	DATENAME(Month, txn_date) AS month_name,
+	MONTH(txn_date) AS month_num,
+	
+	COUNT(CASE WHEN txn_type = 'deposit' THEN 1 END) AS deposit_count,
+	COUNT(CASE WHEN txn_type = 'purchase' THEN 1 END) AS purchase_count,
+	COUNT(CASE WHEN txn_type = 'withdrawal' THEN 1 END) AS withdrawal_count
+FROM customer_transactions
+GROUP BY customer_id, DATENAME(MONTH, txn_date), MONTH(txn_date)
+)
+SELECT
+	month_name,
+	COUNT(customer_id) AS customer_count
+FROM customer_monthly_activity
+WHERE deposit_count > 1
+AND (purchase_count >= 1 OR withdrawal_count >= 1)
+
+GROUP BY month_name, month_num
+ORDER BY month_num
+
+
+--4. What is the closing balance for each customer at the end of the month?
+WITH Monthly_cashflow AS (
+SELECT
+	customer_id,
+	DATENAME(Month, txn_date) AS month_name,
+	MONTH(txn_date) AS month_id,
+
+	SUM( CASE WHEN txn_type = 'deposit' THEN txn_amount 
+	ELSE -txn_amount END)
+	AS net_change
+FROM customer_transactions
+
+GROUP BY customer_id, DATENAME(Month, txn_date), MONTH(txn_date)
+)
+
+SELECT
+	customer_id,
+	month_name,
+	net_change AS monthly_netchange,
+	SUM(net_change) OVER(PARTITION BY customer_id ORDER BY month_id
+	ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+	)
+	AS Closing_balance
+FROM Monthly_cashflow
+ORDER BY customer_id, month_id
+
+--5.What is the percentage of customers who increase their closing balance by more than 5%?
+
+WITH monthly_closing_balances AS (
+SELECT
+	customer_id,
+	DATENAME(Month, txn_date) AS month_name,
+	MONTH(txn_date) AS month_id,
+
+	SUM( CASE WHEN txn_type = 'deposit' THEN txn_amount 
+	ELSE -txn_amount END)
+	AS net_change
+FROM customer_transactions
+
+GROUP BY customer_id, DATENAME(Month, txn_date), MONTH(txn_date)
+),
+
+Closing_balance_running AS 
+(
+SELECT
+	customer_id,
+	month_id,
+	month_name,
+	net_change AS monthly_netchange,
+	SUM(net_change) OVER(PARTITION BY customer_id ORDER BY month_id
+	ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+	)
+	AS Closing_balance
+FROM monthly_closing_balances
+
+),
+----Previous months balance
+Lagged_balances  AS
+(
+
+SELECT
+	customer_id,
+	month_id,
+	month_name,
+	closing_balance,
+	LAG(closing_balance) OVER(PARTITION BY Customer_id ORDER BY month_id) AS previous_closing_balance
+FROM closing_balance_running
+),
+
+Growth_indicators AS 
+(
+SELECT
+	customer_id,
+	month_id,
+
+	CASE 
+		WHEN previous_closing_balance IS NULL or previous_closing_balance <= 0 THEN 0
+		WHEN CAST(closing_balance AS FLOAT) - previous_closing_balance / previous_closing_balance > 0.05 THEN 1
+		ELSE 0
+	END AS pct5_growth
+FROM Lagged_balances
+)
+
+SELECT
+	CAST(COUNT(DISTINCT CASE WHEN pct5_growth = 1 THEN customer_id END)AS FLOAT)
+	/ COUNT(DISTINCT customer_id) * 100 AS percentage_of_customers
+
+FROM growth_indicators
+
+
+--For this multi-part challenge question - you have been requested to generate the following data elements to help the Data Bank team estimate how much data will need to be provisioned for each option:
+--1)running customer balance column that includes the impact each transaction
+
+
+
+
+
+
+
+WITH transaction_base AS (
+SELECT
+	customer_id,
+	txn_date,
+	EOMONTH(txn_date) AS end_of_month,
+	DATEPART(month, txn_date) AS txn_month,
+	DATEPART(year, txn_date) AS txn_year,
+	txn_type,
+	txn_amount,
+	CASE WHEN txn_type = 'deposit' THEN txn_amount 
+	ELSE -txn_amount END
+	AS net_amount
+FROM customer_transactions
+),
+ running_balances AS(
+
+SELECT
+	customer_id,
+	txn_date,
+	end_of_month,
+	txn_month,
+	txn_year,
+	SUM(net_amount) OVER(PARTITION BY customer_id ORDER BY txn_date, txn_type
+	ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+	)
+	AS running_balance
+FROM transaction_base
+),
+
+Month_end_balances AS (
+SELECT
+	customer_id,
+	txn_month,
+	txn_year,
+	running_balance AS end_of_month_balance,
+	ROW_NUMBER () OVER(PARTITION BY customer_id, txn_month, txn_year ORDER BY txn_date DESC, running_balance DESC
+	) AS rn
+FROM running_balances
+),
+
+Customer_aggregates AS 
+(
+SELECT
+	customer_id,
+	MIN(running_balance) AS min_balance,
+	MAX(running_balance) AS max_balance,
+	AVG(running_balance) AS avg_balance
+FROM running_balances
+GROUP BY customer_id
+),
+
+data_allocation_cte AS 
+(
+	SELECT
+		a.customer_id,
+		a.txn_month,
+		LAG(a.end_of_month_balance, 1, 0) OVER(PARTITION BY a.Customer_id ORDER BY txn_month) AS previous_closing_balance,
+		
+
+		--Option 1: Closing balance:
+		CASE
+			WHEN LAG(a.end_of_month_balance, 1, 0) OVER(PARTITION BY a.Customer_id ORDER BY txn_month) > 0
+				THEN LAG(a.end_of_month_balance, 1, 0) OVER(PARTITION BY a.Customer_id ORDER BY txn_month)
+				ELSE 0
+
+			END AS option1_allocated_data,
+
+		-- Option2:AVG balance:
+		CASE
+			WHEN b.avg_balance > 0 THEN b.avg_balance
+			ELSE 0
+		END AS option2_allocated_data,
+
+		--Option3: Min/Max balance
+		CASE
+			WHEN b.max_balance > 0 THEN b.max_balance
+			ELSE 0
+		END AS option3_allocated_data
+		FROM Month_end_balances a
+		JOIN Customer_aggregates b
+			ON a.customer_id = b.customer_id
+		)
+	SELECT * FROM data_allocation_cte
+
+
+	-- Option 1: Non_compounding Interest
+
+	SELECT
+	customer_id, txn_date
+	
+	from customer_transactions
+
+	GROUP BY customer_id, txn_date
+
+WITH transaction_base AS (
+SELECT
+	customer_id,
+	txn_date,
+	EOMONTH(txn_date) AS end_of_month,
+	DATEPART(month, txn_date) AS txn_month,
+	DATENAME(month, txn_date) AS month_name,
+	DATEPART(year, txn_date) AS txn_year,
+	SUM(CASE 
+	WHEN txn_type = 'deposit' THEN txn_amount 
+	ELSE -txn_amount END)
+	AS net_amount
+FROM customer_transactions
+GROUP BY
+	customer_id,
+	txn_date,
+	EOMONTH(txn_date),
+	DATEPART(month, txn_date),
+	DATENAME(month, txn_date),
+	DATEPART(year, txn_date)
+
+),
+
+running_balances AS(
+
+SELECT
+	customer_id,
+	txn_date,
+	end_of_month,
+	txn_month,
+	month_name,
+	txn_year,
+	SUM(net_amount) OVER(PARTITION BY customer_id ORDER BY txn_date
+	ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+	)
+	AS running_balance
+FROM transaction_base
+),
+
+Balance_duration AS 
+(
+	SELECT
+		customer_id,
+		txn_date,
+		end_of_month,
+		Txn_month,
+		month_name,
+		txn_year,
+		running_balance,
+
+		ISNULL(
+				LEAD(txn_date) OVER(PARTITION BY customer_id ORDER BY txn_date), end_of_month
+		) AS next_transaction_date,
+		
+		DATEDIFF(day, txn_date, 
+		ISNULL(
+				LEAD(txn_date) OVER(PARTITION BY customer_id ORDER BY txn_date), end_of_month))
+		+ 1 AS Days_held
+		FROM running_balances
+		)
+
+	SELECT
+		Customer_id,
+		txn_month,
+		month_name,
+		txn_year,
+		--If running balance is negative, equal it to 0
+		SUM(IIF(running_balance > 0,running_balance, 0)) AS base_data_allocated,
+
+		--bonus interest reward
+		SUM(IIF(running_balance > 0,running_balance, 0) * (0.06/365) * days_held) AS interest_data_reward,
+
+		--Total provision: base + reward
+
+		CAST(SUM(IIF(running_balance > 0,running_balance, 0) * (1.0 + 0.06/365) * days_held) AS INT)
+		AS total_data_required
+	FROM balance_duration
+	GROUP BY customer_id, txn_month, month_name, txn_year
+	ORDER BY customer_id, txn_month, month_name, txn_year
+
