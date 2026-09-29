@@ -1,0 +1,492 @@
+--High Level Sales Analysis
+--1)What was the total quantity sold for all products?
+SELECT
+	SUM(qty) AS total_quantity_sold,
+	Prod_id
+FROM sales
+GROUP BY Prod_id
+ORDER BY total_quantity_sold DESC
+
+
+--2)What is the total generated revenue for all products before discounts?
+
+SELECT
+SUM(qty * price) AS revenue_before_discount
+
+FROM sales
+
+
+
+--3)What was the total discount amount for all products?
+SELECT
+SUM(discount) AS total_discount
+
+FROM Sales
+
+--Transaction Analysis
+--1) How many unique transactions were there?
+
+SELECT 
+	COUNT (DISTINCT txn_id) AS unique_transactions
+FROM sales
+
+--2) What is the average unique products purchased in each transaction?
+
+WITH unique_prod_id AS (
+SELECT
+	COUNT(DISTINCT prod_id) AS unique_prod,
+	TXN_ID
+
+FROM sALES
+GROUP BY txn_id
+)
+SELECT
+	AVG(unique_prod) AS avg_unique_prod
+FROM unique_prod_id
+
+--3) What are the 25th, 50th and 75th percentile values for the revenue per transaction?
+
+WITH transaction_revenue AS (
+	SELECT
+		txn_id,
+		SUM(qty * price) AS total_txn_revenue
+	
+	FROM Sales
+	GROUP BY txn_id
+	)
+
+SELECT DISTINCT
+	Percentile_cont(0.25) WITHIN GROUP (ORDER BY total_txn_revenue) OVER() AS percentile_25,
+	Percentile_cont(0.50) WITHIN GROUP(ORDER BY total_txn_revenue) OVER() AS percentile_50_median,
+	Percentile_cont(0.75) WITHIN GROUP(ORDER BY total_txn_revenue) OVER() AS percentile_75
+FROM Transaction_revenue;
+
+--4) What is the average discount value per transaction?
+
+WITH transaction_discount AS (
+	SELECT
+		txn_id,
+		AVG(discount * 1.0) AS Avg_discount_percentage
+	FROM Sales
+	GROUP BY txn_id
+)
+
+SELECT 
+	ROUND(AVG(avg_discount_percentage), 2) AS avg_discount_per_transaction
+FROM transaction_discount
+
+--5) What is the percentage split of all transactions for members vs non-members?
+WITH buyer_category AS (
+
+SELECT
+	COUNT(DISTINCT txn_id) AS total_transactions,
+	CASE 
+		WHEN member = 't' THEN 'Member' ELSE 'Non-Member' END AS member_categorization
+FROM sales
+GROUP BY member
+)
+
+	SELECT
+		member_categorization,
+		total_transactions,
+	
+		ROUND(total_transactions * 100 / SUM(total_transactions) OVER(),
+		2) AS transaction_percentage
+	FROM buyer_category
+
+
+--6) What is the average revenue for member transactions and non-member transactions?
+
+
+WITH transaction_revenue AS (
+
+SELECT
+	txn_id,
+	member,
+	SUM(qty * price) AS total_revenue
+FROM Sales
+GROUP BY txn_id, member
+)
+
+SELECT
+	
+	CASE 
+		WHEN member = 't' THEN 'Member' ELSE 'Non-Member' END AS member_categorization,
+	ROUND(AVG(CAST(total_revenue AS DECIMAL(8, 2))), 2) AS avg_revenue
+FROM transaction_revenue
+GROUP BY member
+
+--Product Analysis
+--1. What are the top 3 products by total revenue before discount?
+SELECT TOP 3
+prod_id,
+SUM(qty * price) AS total_revenue
+
+FROM Sales
+GROUP BY prod_id
+ORDER BY total_revenue DESC
+
+--What is the total quantity, revenue and discount for each segment?
+SELECT
+	SUM(s.qty) AS total_quantity,
+	SUM(s.qty * s.price) AS total_revenue,
+	SUM(s.discount) AS total_discount,
+	pd.segment_name AS segment
+
+FROM Sales s
+JOIN Product_details pd
+	ON s.prod_id = pd.prod_id
+GROUP BY pd.segment_name
+
+
+--What is the top selling product for each segment?
+
+WITH Sales_qty_rank AS (
+SELECT
+	SUM(s.qty) AS total_quantity,
+	pd.segment_name,
+	pd.Product_name,
+
+	Rank() OVER(PARTITION BY pd.segment_name ORDER BY SUM(s.qty) DESC) AS sales_rank
+
+FROM Sales s
+JOIN Product_details pd
+	ON s.prod_id = pd.prod_id
+GROUP BY pd.product_name, pd.segment_name
+)
+
+SELECT
+	segment_name,
+	product_name,
+	total_quantity
+FROM Sales_qty_rank
+WHERE sales_rank =1
+ORDER BY segment_name
+
+
+--What is the total quantity, revenue and discount for each category?
+
+SELECT
+	SUM(s.qty) AS total_quantity,
+	SUM(s.qty * s.price) AS total_revenue,
+	SUM(s.discount) AS total_disocunt,
+	pd.category_name
+
+FROM Sales s
+JOIN product_details pd
+	ON s.prod_id = pd.prod_id
+GROUP BY pd.category_name
+
+
+--What is the top selling product for each category?
+
+WITH Ranking_Product_Sales AS (
+
+SELECT
+	SUM(s.qty) AS sold_quantity,
+	pd.product_name,
+	pd.category_name,
+	RANK() OVER(PARTITION BY category_name ORDER BY SUM(s.qty) DESC) AS Sales_rank
+FROM Sales s
+	JOIN Product_details pd
+ON s.prod_id = pd.prod_id
+GROUP BY pd.product_name, pd.category_name
+)
+
+SELECT
+	product_name,
+	category_name,
+	sold_quantity
+FROM Ranking_product_Sales
+WHERE Sales_rank = 1
+
+--What is the percentage split of revenue by product for each segment?
+WITH Total_Segment_Revenue AS (
+SELECT
+	SUM(s.qty * s.price) AS total_revenue,
+	pd.segment_name,
+	pd.product_name
+
+FROM Sales s
+JOIN Product_details pd
+ ON s.prod_id = pd.prod_id
+GROUP BY pd.segment_name, pd.product_name
+)
+SELECT
+	segment_name,
+	product_name,
+	ROUND( 100.0 * Total_revenue / SUM(Total_revenue) OVER(PARTITION BY segment_name), 2) AS revenue_split_percentage
+FROM Total_Segment_Revenue
+
+--What is the percentage split of revenue by segment for each category?
+
+WITH Category_revenue AS (
+SELECT
+	SUM(s.qty * s.price) AS Total_revenue,
+	pd.segment_name,
+	pd.category_name
+FROM Sales s
+JOIN Product_details pd
+	ON s.prod_id = pd.prod_id
+GROUP BY pd.segment_name, pd.category_name
+)
+
+SELECT
+	segment_name,
+	category_name,
+	ROUND( 100.0 * Total_revenue / SUM(total_revenue) OVER(PARTITION BY Category_name), 2) AS category_revenue_split_percentage
+FROM Category_revenue
+
+--What is the percentage split of total revenue by category?
+
+WITH Total_overall_revenue AS (
+
+SELECT
+	SUM(s.qty * s.price) AS total_revenue,
+	pd.category_name
+FROM Sales s
+JOIN product_details pd
+	ON s.prod_id = pd.prod_id
+GROUP BY pd.category_name
+)
+
+SELECT
+	Category_name,
+	ROUND( 100.0 * Total_revenue / SUM(total_revenue) OVER(), 2) AS category_revenue_percentage
+FROM Total_Overall_revenue
+
+--What is the total transaction “penetration” for each product? (hint: penetration = number of transactions where at least 1 quantity of a product was purchased divided by total number of transactions)
+
+WITH Product_txn_count AS (
+	SELECT
+		prod_id,
+		COUNT(DISTINCT txn_id) AS Product_Transactions
+	FROM Sales
+	GROUP BY prod_id 
+
+)
+
+SELECT
+	p.prod_id,
+	pd.product_name,
+	p.product_transactions,
+ROUND( 100 * p.Product_transactions / (SELECT COUNT(DISTINCT txn_id) FROM Sales), 2) AS penetration_percentage
+FROM product_txn_count p
+JOIN Product_details pd
+	ON p.prod_id = pd.prod_id
+ORDER BY penetration_percentage DESC
+
+--What is the most common combination of at least 1 quantity of any 3 products in a 1 single transaction?
+SELECT
+	p1.product_name AS product_1,
+	p2.product_name AS product_2,
+	p3.product_name AS product_3,
+	COUNT(*) AS common_transaction_count
+	
+FROM Sales s1
+JOIN Sales s2
+	ON s1.txn_id = s2.txn_id 
+	AND s1.prod_id < s2.prod_id
+JOIN sales s3 
+	ON s1.txn_id = s3.txn_id 
+	AND s2.prod_id < s3.prod_id
+
+LEFT JOIN product_details p1 ON s1.prod_id = p1.prod_id
+LEFT JOIN product_details p2 ON s2.prod_id = p2.prod_id
+LEFT JOIN product_details p3 ON s3.prod_id = p3.prod_id
+
+
+GROUP BY p1.product_name, p2.product_name, p3.product_name
+ORDER BY common_transaction_count DESC;
+
+---=============Final query to consolidate all the queries into one script==========
+
+
+-- =================================================================================
+-- BALANCED TREE CLOTHING CO. - MULTI-MONTH COMPARISON SUITE (JAN & FEB SIDE-BY-SIDE)
+-- TARGET AUDIENCE: CHIEF FINANCIAL OFFICER (DANNY MA)
+-- DESIGN: FORCE INLINE DETERMINISTIC MONTH KEYS (RESOLVES ALL COLUMN ERROR MSGS)
+-- =================================================================================
+----ADD Lines 7-30 for single month analysis/delete for months 1-3 comparison
+DECLARE @TargetMonth VARCHAR(20) = 'January';
+
+-- ---------------------------------------------------------------------------------
+--  STEP 2: DYNAMIC CALENDAR ROUTING ENGINE (Lines 7-30)
+-- ---------------------------------------------------------------------------------
+DECLARE @TargetMonthNumber INT = CASE 
+    WHEN @TargetMonth = 'January'  THEN 1
+    WHEN @TargetMonth = 'February' THEN 2
+    WHEN @TargetMonth = 'March'    THEN 3
+    ELSE 1
+END;
+
+DECLARE @TotalGlobalTxns FLOAT;
+
+-- Pulls the target month's denominator directly using integer matching
+SELECT @TotalGlobalTxns = COUNT(DISTINCT txn_id) 
+FROM sales 
+WHERE DATEPART(MONTH, start_txn_time) = @TargetMonthNumber;
+-- ---------------------------------------------------------------------------------
+-- CLEANUP DROP BLOCK
+-- ---------------------------------------------------------------------------------
+DROP TABLE IF EXISTS report_high_level_sales;
+DROP TABLE IF EXISTS report_transaction_percentiles;
+DROP TABLE IF EXISTS report_member_splits;
+DROP TABLE IF EXISTS report_product_performance_summary;
+DROP TABLE IF EXISTS report_revenue_splits_by_category;
+DROP TABLE IF EXISTS report_top_winning_triplet;
+GO
+
+-- =================================================================================
+-- TABLE 1: HIGH LEVEL SALES ANALYSIS (Questions 1, 2, 3)
+-- =================================================================================
+SELECT
+    DATENAME(MONTH, start_txn_time) AS reporting_month,
+    MONTH(start_txn_time) AS month_sort_key, 
+    SUM(qty) AS total_quantity_sold,
+    SUM(qty * price) AS gross_revenue_before_discount,
+    ROUND(SUM(qty * price * (discount / 100.0)), 2) AS total_discount_dollars
+INTO report_high_level_sales
+FROM sales
+GROUP BY DATENAME(MONTH, start_txn_time), MONTH(start_txn_time);
+
+-- =================================================================================
+-- TABLE 2: TRANSACTION ANALYSIS - PERCENTILES (Question 3 & 4)
+-- =================================================================================
+WITH transaction_revenue AS (
+    SELECT 
+        DATENAME(MONTH, start_txn_time) AS reporting_month,
+        MONTH(start_txn_time) AS month_sort_key,
+        txn_id, 
+        SUM(qty * price) AS total_txn_revenue
+    FROM sales
+    GROUP BY DATENAME(MONTH, start_txn_time), MONTH(start_txn_time), txn_id
+)             
+SELECT DISTINCT
+    reporting_month,
+    month_sort_key,
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY total_txn_revenue) OVER(PARTITION BY month_sort_key) AS percentile_25,
+    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY total_txn_revenue) OVER(PARTITION BY month_sort_key) AS percentile_50_median,
+    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY total_txn_revenue) OVER(PARTITION BY month_sort_key) AS percentile_75
+INTO report_transaction_percentiles
+FROM transaction_revenue;
+
+-- =================================================================================
+-- TABLE 3: TRANSACTION ANALYSIS - SHOPS BY MEMBER TYPE (Question 5 & 6)
+-- =================================================================================
+WITH buyer_category AS (
+    SELECT
+        DATENAME(MONTH, start_txn_time) AS reporting_month,
+        MONTH(start_txn_time) AS month_sort_key, 
+        CASE WHEN member = 't' THEN 'Member' ELSE 'Non-Member' END AS member_categorization,
+        COUNT(DISTINCT txn_id) AS total_transactions,
+        SUM(qty * price) AS total_revenue
+    FROM sales
+    GROUP BY DATENAME(MONTH, start_txn_time), MONTH(start_txn_time), CASE WHEN member = 't' THEN 'Member' ELSE 'Non-Member' END
+)
+SELECT
+    reporting_month,
+    month_sort_key,
+    member_categorization,
+    total_transactions,
+    ROUND(100.0 * total_transactions / SUM(total_transactions) OVER(PARTITION BY month_sort_key), 2) AS transaction_percentage_split,
+    ROUND(total_revenue / total_transactions, 2) AS avg_revenue_per_transaction
+INTO report_member_splits
+FROM buyer_category;
+
+-- =================================================================================
+-- TABLE 4: PRODUCT PERFORMANCE DETAILS (Questions 1, 2, 4, 9)
+-- =================================================================================
+WITH global_monthly_txns AS (
+    SELECT 
+        MONTH(start_txn_time) AS r_month_key,
+        COUNT(DISTINCT txn_id) AS monthly_total_txns
+    FROM sales
+    GROUP BY MONTH(start_txn_time)
+)
+SELECT
+    DATENAME(MONTH, s.start_txn_time) AS reporting_month,
+    MONTH(s.start_txn_time) AS month_sort_key, 
+    pd.product_name,
+    pd.segment_name,
+    pd.category_name,
+    SUM(s.qty) AS total_quantity_sold,
+    SUM(s.qty * s.price) AS total_gross_revenue,
+    ROUND(SUM(s.qty * s.price * (s.discount / 100.0)), 2) AS total_discount_dollars,
+    ROUND(100.0 * COUNT(DISTINCT s.txn_id) / MAX(g.monthly_total_txns), 2) AS penetration_percentage
+INTO report_product_performance_summary
+FROM sales s
+JOIN product_details pd ON s.prod_id = pd.prod_id
+JOIN global_monthly_txns g ON MONTH(s.start_txn_time) = g.r_month_key
+GROUP BY DATENAME(MONTH, s.start_txn_time), MONTH(s.start_txn_time), pd.product_name, pd.segment_name, pd.category_name;
+
+-- =================================================================================
+-- TABLE 5: REVENUE SPLIT PERCENTAGE BY CATEGORY (Question 6, 7, 8)
+-- =================================================================================
+WITH total_overall_revenue AS (
+    SELECT
+        DATENAME(MONTH, s.start_txn_time) AS reporting_month,
+        MONTH(s.start_txn_time) AS month_sort_key, 
+        pd.category_name,
+        SUM(s.qty * s.price) AS total_revenue
+    FROM sales s
+    JOIN product_details pd ON s.prod_id = pd.prod_id
+    GROUP BY DATENAME(MONTH, s.start_txn_time), MONTH(s.start_txn_time), pd.category_name
+)
+SELECT
+    reporting_month,
+    month_sort_key,
+    category_name,
+    total_revenue,
+    ROUND(100.0 * total_revenue / SUM(total_revenue) OVER(PARTITION BY month_sort_key), 2) AS category_revenue_percentage
+INTO report_revenue_splits_by_category
+FROM total_overall_revenue;
+
+-- =================================================================================
+-- TABLE 6: STRONGEST 3-PRODUCT COMBINATION TRIPLET PER MONTH 
+-- =================================================================================
+WITH monthly_triplets AS (
+    SELECT 
+        DATENAME(MONTH, s1.start_txn_time) AS reporting_month,
+        MONTH(s1.start_txn_time) AS month_sort_key,
+        p1.product_name AS product_1,
+        p2.product_name AS product_2,
+        p3.product_name AS product_3,
+        COUNT(*) AS common_transaction_count,
+        ROW_NUMBER() OVER(PARTITION BY MONTH(s1.start_txn_time) ORDER BY COUNT(*) DESC) AS combo_rank
+    FROM sales s1
+    JOIN sales s2 ON s1.txn_id = s2.txn_id AND s1.prod_id < s2.prod_id AND MONTH(s1.start_txn_time) = MONTH(s2.start_txn_time)
+    JOIN sales s3 ON s1.txn_id = s3.txn_id AND s2.prod_id < s3.prod_id AND MONTH(s2.start_txn_time) = MONTH(s3.start_txn_time)
+    LEFT JOIN product_details p1 ON s1.prod_id = p1.prod_id
+    LEFT JOIN product_details p2 ON s2.prod_id = p2.prod_id
+    LEFT JOIN product_details p3 ON s3.prod_id = p3.prod_id
+    GROUP BY DATENAME(MONTH, s1.start_txn_time), MONTH(s1.start_txn_time), p1.product_name, p2.product_name, p3.product_name
+)
+SELECT 
+    reporting_month,
+    month_sort_key,
+    product_1,
+    product_2,
+    product_3,
+    common_transaction_count
+INTO report_top_winning_triplet
+FROM monthly_triplets
+WHERE combo_rank = 1;
+
+
+
+--==========List of Tables=========================
+SELECT * FROM report_transaction_percentiles
+ORDER BY month_sort_key
+
+SELECT * FROM report_top_winning_triplet
+ORDER BY month_sort_key
+
+SELECT * FROM report_revenue_splits_by_category
+ORDER BY month_sort_key
+
+SELECT * FROM report_product_performance_summary
+ORDER BY month_sort_key
+
+SELECT * FROM report_member_splits
+ORDER BY month_sort_key
