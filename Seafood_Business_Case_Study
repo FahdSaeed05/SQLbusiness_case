@@ -1,4 +1,5 @@
---CLIQUE_bait case study
+--------===========Sea_food_Business_Case_Study========================
+
 --1. How many users are there?
 SELECT
 COUNT(DISTINCT user_id) AS User_count
