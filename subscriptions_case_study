@@ -1,0 +1,388 @@
+--==========================Subscriptions (Business_case Analysis)====================================
+--===1.How many customers has Foodie-Fi ever had?
+
+SELECT 
+	COUNT(DISTINCT customer_id) AS Total_Customers
+FROM foodie_fi.subscriptions
+
+--====2.What is the monthly distribution of trial plan start_date values for our dataset - use the start of the month as the group by value
+select
+	COUNT(*) AS trial_starts,
+	DATETRUNC(MONTH, start_date) AS month_start
+FROM foodie_fi.subscriptions
+WHERE plan_id = 0
+GROUP BY DATETRUNC(MONTH, start_date)
+Order BY month_start 
+
+--=====3. What plan start_date values occur after the year 2020 for our dataset? Show the breakdown by count of events for each plan_name
+
+WITH Subscriptions_plans AS
+(SELECT
+	 fp.plan_name,
+	 DATENAME(YEAR, fs.start_date) AS Start_year,
+	 fs.plan_id
+
+FROM foodie_fi.plans fp
+JOIN foodie_fi.subscriptions fs
+	ON fp.plan_id = fs.plan_id
+	)
+
+SELECT
+	plan_name,
+	COUNT(*) AS total_events,
+	start_year
+	
+FROM Subscriptions_plans
+WHERE start_year > 2020
+GROUP BY plan_name, start_year
+
+
+-- NON CTE VERSION
+SELECT
+	fp.plan_name,
+	COUNT(*) AS total_events
+FROM foodie_fi.plans fp
+JOIN foodie_fi.subscriptions fs
+	ON fp.plan_id = fs.plan_id
+WHERE fs.start_date >= '2021-01-01'
+GROUP BY fp.plan_name
+ORDER BY fp.plan_name
+--=====4.What is the customer count and percentage of customers who have churned rounded to 1 decimal place?
+SELECT 
+COUNT(*) AS churned_customers,
+ROUND(
+		COUNT(*) * 100 / (SELECT COUNT(DISTINCT customer_id)
+							FROM foodie_fi.subscriptions),
+	1
+	) AS Churn_pecentage
+FROM Foodie_fi.subscriptions
+WHERE plan_id = 4
+--== 5.How many customers have churned straight after their initial free trial - what percentage is this rounded to the nearest whole number?
+
+WITH Customer_plans AS
+(
+	SELECT
+		Customer_id,
+		plan_id,
+		LEAD(plan_id) OVER (PARTITION BY customer_id ORDER BY start_date
+		) AS next_plan
+		FROM foodie_fi.subscriptions
+		)
+		SELECT
+			ROUND(
+			      COUNT(CASE WHEN plan_id = 0 AND next_plan = 4 THEN 1 END) * 100 /
+				  COUNT(CASE WHEN plan_id = 0 THEN 1 END), 
+				  2
+			) AS churned_percentage
+
+FROM Customer_plans
+
+		
+--====6.What is the number and percentage of customer plans after their initial free trial?
+WITH next_plans AS 
+(
+	SELECT
+		customer_id,
+		plan_id,
+		LEAD(plan_id) OVER(PARTITION BY customer_id ORDER BY start_date) AS next_plan_id
+	from foodie_fi.subscriptions
+	)
+	SELECT
+		next_plan_id AS plan_id,
+		COUNT(customer_id) AS converted_customers,
+		ROUND(
+				100 * COUNT(customer_id) / 
+				(SELECT COUNT(DISTINCT customer_id) 
+				FROM Foodie_fi.subscriptions),
+				1 
+				) AS conversion_percentage
+	FROM next_plans
+	WHERE plan_id = 0
+	AND next_plan_id IS NOT NULL
+	GROUP BY next_plan_id
+	ORDER BY next_plan_id
+
+
+--7. What is the customer count and percentage breakdown of all 5 plan_name values at 2020-12-31?
+
+WITH Customer_Plans AS
+(
+SELECT
+	s.customer_id,
+	s.plan_id,
+	p.plan_name,
+	s.start_date,
+
+ROW_NUMBER() OVER(PARTITION BY s.customer_id ORDER BY s.start_date DESC) as rn
+FROM Foodie_fi.subscriptions s
+JOIN foodie_fi.plans p
+	ON s.plan_id = p.plan_id
+WHERE s.start_date <= '2020-12-31'
+)
+	SELECT
+	plan_name,
+	COUNT(*) AS customer_count,
+	ROUND(
+			COUNT(*) * 100 / (SELECT COUNT(*) 
+			FROM customer_plans 
+			WHERE rn =1),
+			1 )
+			AS Total_percentage
+	FROM Customer_plans
+	WHERE rn = 1
+	GROUP BY plan_name
+	ORDER BY customer_count DESC
+
+
+	----===8.How many customers have upgraded to an annual plan in 2020?
+	
+SELECT
+	COUNT(customer_id) AS customer_count
+	FROM foodie_fi.subscriptions
+	WHERE plan_id = 3
+	AND start_date BETWEEN '2020-01-01' AND '2020-12-31'
+
+--===9.How many days on average does it take for a customer to an annual plan from the day they join Foodie-Fi?
+
+
+WITH trial_date AS (
+
+SELECT 
+customer_id,
+plan_id,
+start_date AS trial_date
+
+FROM foodie_fi.subscriptions
+WHERE plan_id = 0
+),
+
+Annual_date AS
+(
+SELECT
+	customer_id,
+	plan_id,
+	start_date AS annual_date
+FROM foodie_fi.subscriptions
+WHERE plan_id = 3
+)
+SELECT
+	AVG(DATEDIFF(DAY, Trial_date, annual_date)) AS days_to_upgrade
+FROM trial_date td
+JOIN annual_date ad
+ON td.customer_id = ad.customer_id
+
+--====10. Can you further breakdown this average value into 30 day periods (i.e. 0-30 days, 31-60 days etc)
+
+WITH trial_date AS (
+
+SELECT 
+customer_id,
+plan_id,
+start_date AS trial_date
+
+FROM foodie_fi.subscriptions
+WHERE plan_id = 0
+),
+
+Annual_date AS
+(
+SELECT
+	customer_id,
+	plan_id,
+	start_date AS annual_date
+FROM foodie_fi.subscriptions
+WHERE plan_id = 3
+),
+Customer_days AS (
+SELECT
+	DATEDIFF(DAY, Trial_date, annual_date) AS days_to_upgrade
+FROM trial_date td
+JOIN annual_date ad
+ON td.customer_id = ad.customer_id
+)
+
+SELECT
+	CASE
+		WHEN days_to_upgrade BETWEEN 0 AND 30 THEN '0-30 Days'
+		WHEN days_to_upgrade BETWEEN 31 AND 60 THEN '31-60 Days'
+		WHEN days_to_upgrade BETWEEN 61 AND 90 THEN '61-90 Days'
+		WHEN days_to_upgrade BETWEEN  91 AND 120 THEN '91-120 Days'
+		ELSE '121+ days bucket'
+	END AS Days_bucket,
+	COUNT(*) AS Customer_count
+FROM Customer_days
+GROUP BY
+		CASE
+		WHEN days_to_upgrade BETWEEN 0 AND 30 THEN '0-30 Days'
+		WHEN days_to_upgrade BETWEEN 31 AND 60 THEN '31-60 Days'
+		WHEN days_to_upgrade BETWEEN 61 AND 90 THEN '61-90 Days'
+		WHEN days_to_upgrade BETWEEN  91 AND 120 THEN '91-120 Days'
+		ELSE '121+ days bucket'
+	END
+ORDER BY MIN(days_to_upgrade)
+
+
+
+
+--==11.How many customers downgraded from a pro monthly to a basic monthly plan in 2020?
+
+WITH Plan_changes AS
+(
+SELECT 
+	customer_id,
+	plan_id,
+	start_date,
+	LEAD(plan_id) OVER(PARTITION BY customer_id ORDER BY start_date) AS next_plan_id
+
+FROM foodie_fi.subscriptions
+)
+
+SELECT
+	COUNT(DISTINCT customer_id) AS customers_downgraded
+
+FROM plan_changes
+WHERE plan_id = 2
+AND next_plan_id = 1
+AND YEAR(start_date) = '2020'
+
+
+--==Step1: Track when the Next plan starts and calculate the end of 2020 boundary
+-- 1. Create the physical target table
+CREATE TABLE payments_2020 (
+    payment_id     INT IDENTITY(1,1) PRIMARY KEY,
+    customer_id    INT NOT NULL,
+    plan_id        INT NOT NULL,
+    plan_name      VARCHAR(50) NOT NULL,
+    payment_date   DATE NOT NULL,
+    amount         DECIMAL(10,2) NOT NULL,
+    payment_order  INT NOT NULL
+);
+
+
+
+
+
+-- 2. Build the Common Table Expressions (CTEs) to isolate and loop dates
+
+WITH lead_subs AS (
+
+SELECT 
+	s.customer_id,
+	s.plan_id,
+	p.plan_name,
+	s.start_date,
+	p.price,
+	LEAD(s.start_date) OVER(PARTITION BY s.customer_id ORDER BY start_date) AS next_date
+FROM Foodie_fi.subscriptions s
+JOIN Foodie_fi.plans p
+	ON s.plan_id = p.plan_id
+WHERE s.start_date <= '2020-12-31'
+),
+
+Payment_dates AS (
+SELECT
+	customer_id,
+	plan_id,
+	plan_name,
+	start_date AS payment_date,
+
+	CASE
+		WHEN next_date IS NULL THEN '2020-12-31'
+		WHEN next_date >  '2020-12-31' THEN '2020-12-31'
+		ELSE DATEADD(DAY, -1, next_date)
+	END AS last_payment_date,
+	price AS amount
+FROM lead_subs
+WHERE plan_id != 0 AND plan_id != 4
+
+UNION ALL
+
+SELECT
+	customer_id,
+	plan_id,
+	plan_name,
+
+	CASE
+		WHEN plan_id IN (1,2) THEN DATEADD(MONTH, 1, payment_date)
+		WHEN plan_id = 3 THEN DATEADD(YEAR, 1, payment_date)
+	END AS payment_date,
+	last_payment_date,
+	amount
+FROM payment_dates
+
+-- Recursion condition:Keep running until the next cycle surpasses the cutoff or the end of 2020
+WHERE (plan_id IN (1,2) AND DATEADD(MONTH, 1, payment_date) <= last_payment_date)
+	OR (plan_id = 3 AND DATEADD(YEAR, 1, payment_date) <= last_payment_date)
+	),
+	prorated_adjustments AS (
+
+	--Step4: Handle mid-month upgrade discounts (e.g, upgrading from basic to pro)
+
+	SELECT
+		customer_id,
+		plan_id,
+		plan_name,
+		payment_date,
+
+		CASE
+			WHEN plan_id = 2 AND LAG(plan_id) OVER(PARTITION BY customer_id ORDER BY payment_date) = 1
+				AND DATEDIFF(DAY, LAG(payment_date) OVER(PARTITION BY customer_id ORDER BY payment_date), payment_date) <= 30
+			THEN amount - 9.90 -- Subtract the $9.90 basic monthly payment from the $19.90 pro plan
+			ELSE amount
+		END AS amount
+	FROM payment_dates
+)
+
+-- Step 5: Insert into the target table while generating sequential order numbers
+INSERT INTO payments_2020 (customer_id, plan_id, plan_name, payment_date, amount, payment_order)
+
+SELECT
+	customer_id, 
+	plan_id, 
+	plan_name, 
+	payment_date,
+	amount, 
+	ROW_NUMBER() OVER(PARTITION BY customer_id ORDER BY payment_date) AS payment_order
+FROM prorated_adjustments
+ORDER BY customer_id, payment_date;
+
+
+
+SELECT * FROM payments_2020
+
+--1.	How would you calculate the rate of growth for Foodie-Fi?
+
+WITH Monthly_Revenue AS
+(
+
+	SELECT
+		Month(payment_date) AS payment_month,
+		DATENAME(Month, payment_date) AS month_name,
+		SUM(Amount) AS Revenue
+	FROM payments_2020
+	GROUP BY Month(payment_date),
+			DATENAME(Month, payment_date)
+	)
+
+SELECT
+	month_name,
+	revenue,
+	LAG(revenue) OVER(ORDER BY payment_month) AS previous_month_revenue,
+	(revenue - LAG(revenue) OVER(ORDER BY payment_month)) /
+	LAG(revenue) OVER(ORDER BY payment_month) * 100 AS growth_rate
+FROM monthly_revenue
+ORDER BY payment_month
+
+
+--==2.	What key metrics would you recommend Foodie-Fi management to track over time to assess performance of their overall business?
+--YOY Growth Rate, Revenue, Churn_rate.
+
+1.	Recommended Metrics: 
+2.	Area	3.	KPI
+4.	Revenue	5.	Monthly Revenue / MRR
+6.	Revenue	7.	Revenue Growth %
+8.	Customers	9.	Active Customers
+10.	Customers	11.	Customer Growth %
+12.	Acquisition	13.	Trial to Paid Conversion
+
+
