@@ -1,6 +1,7 @@
+--==========Clothing_Retail_Business_Case_Analysis========================================
 
+--Sales Analysis==
 
---High Level Sales Analysis
 --1)What was the total quantity sold for all products?
 SELECT
 	SUM(qty) AS total_quantity_sold,
@@ -17,15 +18,14 @@ SUM(qty * price) AS revenue_before_discount
 
 FROM sales
 
-
-
 --3)What was the total discount amount for all products?
 SELECT
 SUM(discount) AS total_discount
 
 FROM Sales
 
---Transaction Analysis
+
+--Transaction Analysis==
 --1) How many unique transactions were there?
 
 SELECT 
@@ -98,7 +98,6 @@ GROUP BY member
 
 
 --6) What is the average revenue for member transactions and non-member transactions?
-
 
 WITH transaction_revenue AS (
 
